@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Mantra Pro Tracker</title>
+    <style>
+        :root {
+            --primary-color: #f39c12;
+            --bg-color: #1a1a1a;
+            --card-bg: #2c3e50;
+            --text-color: #ecf0f1;
+        }
+
+        body {
+            margin: 0; font-family: 'Segoe UI', sans-serif;
+            background-color: var(--bg-color); color: var(--text-color);
+            display: flex; flex-direction: column; align-items: center; min-height: 100vh;
+        }
+
+        /* Screens */
+        .screen { display: none; width: 100%; max-width: 500px; padding: 20px; box-sizing: border-box; flex-direction: column; align-items: center; }
+        .active { display: flex; }
+
+        /* Login & Forms */
+        .card { background: var(--card-bg); padding: 25px; border-radius: 20px; width: 100%; box-shadow: 0 10px 30px rgba(0,0,0,0.5); text-align: center; }
+        input { width: 80%; padding: 12px; margin: 10px 0; border-radius: 10px; border: none; font-size: 1rem; }
+        button { padding: 12px 25px; border-radius: 10px; border: none; background: var(--primary-color); color: white; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        button:active { transform: scale(0.95); }
+
+        /* Mantra List */
+        .mantra-item { background: rgba(255,255,255,0.1); padding: 15px; border-radius: 12px; width: 100%; margin-bottom: 10px; cursor: pointer; text-align: left; }
+        .mantra-item:hover { background: rgba(255,255,255,0.2); }
+
+        /* Chanting Interface */
+        #counter-display { font-size: 4rem; font-weight: 800; margin: 20px 0; color: var(--primary-color); }
+        #total-remaining { font-size: 1.2rem; opacity: 0.8; margin-bottom: 30px; }
+        
+        #tap-area {
+            width: 250px; height: 250px; border-radius: 50%;
+            background: radial-gradient(circle, var(--primary-color) 0%, #d35400 100%);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.5rem; font-weight: bold; cursor: pointer;
+            box-shadow: 0 0 50px rgba(243, 156, 18, 0.3);
+            touch-action: manipulation; user-select: none;
+        }
+
+        /* Progress Bar */
+        #session-progress-container { width: 100%; height: 8px; background: #444; border-radius: 4px; margin-top: 20px; overflow: hidden; }
+        #session-progress-bar { height: 100%; width: 0%; background: var(--primary-color); transition: width 0.3s; }
+
+        #success-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.9);
+            display: none; flex-direction: column; align-items: center; justify-content: center; z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="login-screen" class="screen active">
+        <h1 style="color: var(--primary-color)">Welcome</h1>
+        <div class="card">
+            <input type="text" id="username-input" placeholder="Enter Username">
+            <button onclick="login()">Enter Temple</button>
+        </div>
+    </div>
+
+    <div id="list-screen" class="screen">
+        <h2 id="welcome-msg">Your Mantras</h2>
+        <div id="mantra-list" style="width: 100%"></div>
+        <div class="card" style="margin-top: 20px;">
+            <h3>Add New Mantra</h3>
+            <input type="text" id="new-mantra-name" placeholder="Mantra Name (e.g. Om...)">
+            <input type="number" id="new-mantra-total" placeholder="Total Target (e.g. 100008)">
+            <button onclick="addMantra()">Create Mantra</button>
+        </div>
+    </div>
+
+    <div id="setup-screen" class="screen">
+        <button onclick="showScreen('list-screen')" style="align-self: flex-start;">← Back</button>
+        <h2 id="setup-title">Mantra Name</h2>
+        <div class="card">
+            <p>How many counts for this session?</p>
+            <input type="number" id="session-input" value="108">
+            <button onclick="startChanting()">Start Chanting</button>
+        </div>
+    </div>
+
+    <div id="chanting-screen" class="screen">
+        <div id="total-remaining">Remaining: 0</div>
+        <div id="counter-display">0 / 108</div>
+        <div id="tap-area">TAP</div>
+        <div id="session-progress-container"><div id="session-progress-bar"></div></div>
+    </div>
+
+    <div id="success-overlay">
+        <h1 style="color: gold; font-size: 3rem;">OFFERED!</h1>
+        <p id="success-stats"></p>
+        <button onclick="showScreen('list-screen')" style="background: white; color: black;">Return to List</button>
+    </div>
+
+    <audio id="success-sound" src="https://assets.mixkit.co/active_storage/sfx/2013/2013-preview.mp3"></audio>
+
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.5.1/dist/confetti.browser.min.js"></script>
+    <script>
+        let currentUser = "";
+        let mantras = [];
+        let activeMantraIndex = null;
+        let sessionCount = 0;
+        let sessionTarget = 0;
+
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        // Screen Logic
+        function showScreen(screenId) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(screenId).classList.add('active');
+            document.getElementById('success-overlay').style.display = 'none';
+        }
+
+        // Auth
+        function login() {
+            const user = document.getElementById('username-input').value.trim();
+            if (!user) return alert("Enter a name");
+            currentUser = user;
+            loadData();
+            showScreen('list-screen');
+            renderMantras();
+        }
+
+        // Data Management
+        function loadData() {
+            const saved = localStorage.getItem(`mantra_data_${currentUser}`);
+            mantras = saved ? JSON.parse(saved) : [];
+        }
+
+        function saveData() {
+            localStorage.setItem(`mantra_data_${currentUser}`, JSON.stringify(mantras));
+        }
+
+        function addMantra() {
+            const name = document.getElementById('new-mantra-name').value;
+            const total = parseInt(document.getElementById('new-mantra-total').value);
+            if (!name || !total) return;
+            
+            mantras.push({ name, remaining: total, totalTarget: total });
+            saveData();
+            renderMantras();
+            document.getElementById('new-mantra-name').value = '';
+            document.getElementById('new-mantra-total').value = '';
+        }
+
+        function renderMantras() {
+            const container = document.getElementById('mantra-list');
+            container.innerHTML = mantras.length ? '' : '<p>No mantras yet.</p>';
+            mantras.forEach((m, index) => {
+                const item = document.createElement('div');
+                item.className = 'mantra-item';
+                item.innerHTML = `<strong>${m.name}</strong><br><small>Remaining: ${m.remaining.toLocaleString()}</small>`;
+                item.onclick = () => selectMantra(index);
+                container.appendChild(item);
+            });
+        }
+
+        function selectMantra(index) {
+            activeMantraIndex = index;
+            document.getElementById('setup-title').innerText = mantras[index].name;
+            showScreen('setup-screen');
+        }
+
+        // Chanting Logic
+        function startChanting() {
+            sessionTarget = parseInt(document.getElementById('session-input').value);
+            sessionCount = 0;
+            updateDisplay();
+            showScreen('chanting-screen');
+        }
+
+        function updateDisplay() {
+            const m = mantras[activeMantraIndex];
+            document.getElementById('total-remaining').innerText = `Total Remaining: ${m.remaining.toLocaleString()}`;
+            document.getElementById('counter-display').innerText = `${sessionCount} / ${sessionTarget}`;
+            const percent = (sessionCount / sessionTarget) * 100;
+            document.getElementById('session-progress-bar').style.width = `${percent}%`;
+        }
+
+        document.getElementById('tap-area').addEventListener('pointerdown', (e) => {
+            if (sessionCount < sessionTarget) {
+                sessionCount++;
+                playPop(sessionCount);
+                updateDisplay();
+                if (sessionCount === sessionTarget) finishSession();
+            }
+        });
+
+        function playPop(count) {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.frequency.setValueAtTime(300 + (count % 108), audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+        }
+
+        function finishSession() {
+            const m = mantras[activeMantraIndex];
+            m.remaining = Math.max(0, m.remaining - sessionTarget);
+            saveData();
+            
+            document.getElementById('success-stats').innerText = `${sessionTarget} counts added to ${m.name}`;
+            document.getElementById('success-overlay').style.display = 'flex';
+            document.getElementById('success-sound').play();
+            confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
+        }
+    </script>
+</body>
+</html>
